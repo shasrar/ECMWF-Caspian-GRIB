@@ -54,7 +54,7 @@ jobs:
         id: cfg
         shell: bash
         run: |
-          DAYS="\${{ inputs.days }}"
+          DAYS="${{ inputs.days }}"
           if [ -z "$DAYS" ]; then DAYS="5"; fi
           echo "days=$DAYS" >> "$GITHUB_OUTPUT"
 
@@ -62,7 +62,7 @@ jobs:
         id: fetch
         run: |
           python scripts/build_caspian_grib.py \
-            --days "\${{ steps.cfg.outputs.days }}" \
+            --days "${{ steps.cfg.outputs.days }}" \
             --outdir output
 
       - name: Crop to Caspian Sea
@@ -102,7 +102,7 @@ jobs:
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ECMWF-Caspian-Wave-\${{ steps.fetch.outputs.run_id }}
+          name: ECMWF-Caspian-Wave-${{ steps.fetch.outputs.run_id }}
           path: |
             output/ECMWF_CASPIAN_WAVE.grib2
             output/ECMWF_CASPIAN_WAVE_INFO.txt
@@ -111,7 +111,7 @@ jobs:
 
       - name: Publish fixed latest release
         env:
-          GH_TOKEN: \${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
@@ -121,8 +121,8 @@ jobs:
           cat > output/RELEASE_NOTES.md <<EOF
           ECMWF IFS-WAVE Open Data cropped to the Caspian Sea.
 
-          Source run: \${{ steps.fetch.outputs.run_display }}
-          Forecast horizon: \${{ steps.cfg.outputs.days }} days
+          Source run: ${{ steps.fetch.outputs.run_display }}
+          Forecast horizon: ${{ steps.cfg.outputs.days }} days
           Area: 45E–56E, 35.5N–48.5N
           Fields: SWH, MWD, MWP, PP1D
           Source grid: 0.25 degree
@@ -133,7 +133,7 @@ jobs:
           gh release create latest \
             output/ECMWF_CASPIAN_WAVE.grib2 \
             output/ECMWF_CASPIAN_WAVE_INFO.txt \
-            --title "Latest ECMWF Caspian Wave — \${{ steps.fetch.outputs.run_display }}" \
+            --title "Latest ECMWF Caspian Wave — ${{ steps.fetch.outputs.run_display }}" \
             --notes-file output/RELEASE_NOTES.md \
             --target "$GITHUB_SHA" \
             --latest
