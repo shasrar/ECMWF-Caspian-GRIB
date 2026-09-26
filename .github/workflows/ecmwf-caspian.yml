@@ -1,0 +1,139 @@
+name: Build Caspian ECMWF Wave GRIB
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: Forecast horizon
+        required: true
+        default: "5"
+        type: choice
+        options:
+          - "3"
+          - "5"
+          - "7"
+          - "10"
+  schedule:
+    - cron: "30 8,20 * * *"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/ecmwf-caspian.yml"
+      - "scripts/build_caspian_grib.py"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ecmwf-caspian-grib
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cdo libeccodes-tools
+          python -m pip install --upgrade pip
+          python -m pip install requests
+
+      - name: Select forecast horizon
+        id: cfg
+        shell: bash
+        run: |
+          DAYS="\${{ inputs.days }}"
+          if [ -z "$DAYS" ]; then DAYS="5"; fi
+          echo "days=$DAYS" >> "$GITHUB_OUTPUT"
+
+      - name: Download temporary global ECMWF wave GRIB
+        id: fetch
+        run: |
+          python scripts/build_caspian_grib.py \
+            --days "\${{ steps.cfg.outputs.days }}" \
+            --outdir output
+
+      - name: Crop to Caspian Sea
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cdo -O -f grb2 sellonlatbox,45,56,35.5,48.5 \
+            output/ECMWF_GLOBAL_WAVE_TEMP.grib2 \
+            output/ECMWF_CASPIAN_WAVE.grib2
+
+          test -s output/ECMWF_CASPIAN_WAVE.grib2
+
+          MAGIC="$(head -c 4 output/ECMWF_CASPIAN_WAVE.grib2)"
+          test "$MAGIC" = "GRIB"
+
+          COUNT="$(grib_count output/ECMWF_CASPIAN_WAVE.grib2)"
+          test "$COUNT" -gt 0
+
+          SIZE="$(du -h output/ECMWF_CASPIAN_WAVE.grib2 | awk '{print $1}')"
+
+          {
+            echo "Cropped GRIB messages: $COUNT"
+            echo "Final file size: $SIZE"
+          } >> output/ECMWF_CASPIAN_WAVE_INFO.txt
+
+          echo "Final messages: $COUNT"
+          echo "Final size: $SIZE"
+
+          rm -f output/ECMWF_GLOBAL_WAVE_TEMP.grib2
+
+      - name: Inspect final GRIB
+        run: |
+          grib_ls -p shortName,dataDate,dataTime,stepRange,typeOfLevel \
+            output/ECMWF_CASPIAN_WAVE.grib2 | head -n 80
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ECMWF-Caspian-Wave-\${{ steps.fetch.outputs.run_id }}
+          path: |
+            output/ECMWF_CASPIAN_WAVE.grib2
+            output/ECMWF_CASPIAN_WAVE_INFO.txt
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Publish fixed latest release
+        env:
+          GH_TOKEN: \${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gh release delete latest --yes --cleanup-tag || true
+
+          cat > output/RELEASE_NOTES.md <<EOF
+          ECMWF IFS-WAVE Open Data cropped to the Caspian Sea.
+
+          Source run: \${{ steps.fetch.outputs.run_display }}
+          Forecast horizon: \${{ steps.cfg.outputs.days }} days
+          Area: 45E–56E, 35.5N–48.5N
+          Fields: SWH, MWD, MWP, PP1D
+          Source grid: 0.25 degree
+
+          Generated automatically by GitHub Actions.
+          EOF
+
+          gh release create latest \
+            output/ECMWF_CASPIAN_WAVE.grib2 \
+            output/ECMWF_CASPIAN_WAVE_INFO.txt \
+            --title "Latest ECMWF Caspian Wave — \${{ steps.fetch.outputs.run_display }}" \
+            --notes-file output/RELEASE_NOTES.md \
+            --target "$GITHUB_SHA" \
+            --latest
