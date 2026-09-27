@@ -1,0 +1,58 @@
+name: Cleanup GFS Wave Assets
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/cleanup-gfs-wave.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download Weather assets only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p keep
+          gh release download gfs-latest \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir keep \
+            --pattern 'GFS_CASPIAN_WEATHER.grib2' \
+            --pattern 'GFS_CASPIAN_WEATHER_INFO.txt' \
+            --pattern 'GFS_CASPIAN_WEATHER_3D.grib2' \
+            --pattern 'GFS_CASPIAN_WEATHER_3D_INFO.txt' \
+            --pattern 'GFS_CASPIAN_WEATHER_5D.grib2' \
+            --pattern 'GFS_CASPIAN_WEATHER_5D_INFO.txt' \
+            --pattern 'GFS_CASPIAN_WEATHER_7D.grib2' \
+            --pattern 'GFS_CASPIAN_WEATHER_7D_INFO.txt' \
+            --pattern 'GFS_CASPIAN_WEATHER_10D.grib2' \
+            --pattern 'GFS_CASPIAN_WEATHER_10D_INFO.txt'
+
+      - name: Recreate release without GFS Wave
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release delete gfs-latest --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
+
+          cat > notes.md <<EOF
+          NOAA/NCEP GFS Weather subset for the Caspian Sea.
+
+          GFS Wave has been removed because direct ecCodes validation showed that
+          the Caspian GFS Wave subset contained only missing values.
+
+          Weather horizons retained: 3, 5, 7 and 10 days.
+          EOF
+
+          gh release create gfs-latest \
+            --repo "$GITHUB_REPOSITORY" \
+            keep/* \
+            --title "Latest NOAA GFS Caspian Weather" \
+            --notes-file notes.md \
+            --target "$GITHUB_SHA"
