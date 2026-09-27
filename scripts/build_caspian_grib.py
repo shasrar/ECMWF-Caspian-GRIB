@@ -13,8 +13,8 @@ MODEL = "ifs"
 RESOLUTION = "0p25"
 STREAM = "wave"
 CORE_PARAMS = ("swh", "mwd", "mwp", "pp1d")
+HORIZONS = (3, 5, 7, 10)
 
-# Caspian Sea plus a small margin for approaches and ports.
 WEST, EAST, SOUTH, NORTH = 45.0, 56.0, 35.5, 48.5
 
 
@@ -55,20 +55,16 @@ def parse_index(text: str):
             obj = json.loads(raw)
         except json.JSONDecodeError:
             continue
-
         param = obj.get("param")
         if param not in CORE_PARAMS:
             continue
         if "_offset" not in obj or "_length" not in obj:
             continue
-
-        records.append(
-            {
-                "param": param,
-                "offset": int(obj["_offset"]),
-                "length": int(obj["_length"]),
-            }
-        )
+        records.append({
+            "param": param,
+            "offset": int(obj["_offset"]),
+            "length": int(obj["_length"]),
+        })
     return records
 
 
@@ -98,7 +94,6 @@ def find_latest_complete_run(session, last_step):
             print(f"{run_text}: final step exists but core fields are incomplete.")
         except Exception as exc:
             print(f"{run_text}: not ready ({exc})")
-
     raise RuntimeError("No complete ECMWF 00/12 UTC run found in the last 4 days.")
 
 
@@ -106,27 +101,21 @@ def download_range(session, url, offset, length):
     end = offset + length - 1
     headers = {"Range": f"bytes={offset}-{end}"}
     last = None
-
     for attempt in range(1, 4):
         try:
             response = session.get(url, headers=headers, timeout=120)
             if response.status_code != 206:
                 raise RuntimeError(f"Expected HTTP 206, got {response.status_code}")
-
             data = response.content
             if len(data) != length:
-                raise RuntimeError(
-                    f"Byte count mismatch: expected {length}, got {len(data)}"
-                )
+                raise RuntimeError(f"Byte count mismatch: expected {length}, got {len(data)}")
             if not data.startswith(b"GRIB"):
                 raise RuntimeError("Downloaded field does not start with GRIB.")
             return data
-
         except Exception as exc:
             last = exc
             if attempt < 3:
                 time.sleep(2 * attempt)
-
     raise last
 
 
@@ -139,83 +128,80 @@ def write_github_output(key, value):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--days", type=int, choices=(3, 5, 7, 10), default=5)
+    parser.add_argument("--days", type=int, choices=HORIZONS, default=5)
+    parser.add_argument("--all-horizons", action="store_true")
     parser.add_argument("--outdir", default="output")
     args = parser.parse_args()
 
+    horizons = list(HORIZONS) if args.all_horizons else [args.days]
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
-    global_path = outdir / "ECMWF_GLOBAL_WAVE_TEMP.grib2"
 
-    steps = forecast_steps(args.days)
+    max_days = max(horizons)
+    steps = forecast_steps(max_days)
     last_step = steps[-1]
 
     session = requests.Session()
-    session.headers.update(
-        {"User-Agent": "ECMWF-Caspian-GRIB-GitHub-Actions/1.0"}
-    )
-
+    session.headers.update({"User-Agent": "ECMWF-Caspian-GRIB-GitHub-Actions/1.1"})
     run = find_latest_complete_run(session, last_step)
     run_id = run.strftime("%Y%m%d_%H") + "Z"
+    run_display = run.strftime("%Y-%m-%d %H:00 UTC")
 
-    total_fields = 0
-    with open(global_path, "wb") as output:
+    paths = {
+        d: outdir / f"ECMWF_GLOBAL_WAVE_TEMP_{d}D.grib2"
+        for d in horizons
+    }
+    handles = {d: open(paths[d], "wb") for d in horizons}
+    counts = {d: 0 for d in horizons}
+
+    try:
         for index, step in enumerate(steps, start=1):
             print(f"[{index}/{len(steps)}] +{step}h")
             records = index_for(session, run, step)
             by_param = {r["param"]: r for r in records}
-
             missing = [p for p in CORE_PARAMS if p not in by_param]
             if missing:
-                raise RuntimeError(
-                    f"Missing at +{step}h: {', '.join(missing)}"
-                )
+                raise RuntimeError(f"Missing at +{step}h: {', '.join(missing)}")
 
             grib_url = url_for(run, step, "grib2")
             for param in CORE_PARAMS:
                 rec = by_param[param]
-                data = download_range(
-                    session,
-                    grib_url,
-                    rec["offset"],
-                    rec["length"],
-                )
-                output.write(data)
-                total_fields += 1
+                data = download_range(session, grib_url, rec["offset"], rec["length"])
+                for d in horizons:
+                    if step <= d * 24:
+                        handles[d].write(data)
+                        counts[d] += 1
+    finally:
+        for h in handles.values():
+            h.close()
 
-    if global_path.stat().st_size < 8:
-        raise RuntimeError("Temporary global GRIB is empty.")
+    for d in horizons:
+        p = paths[d]
+        if p.stat().st_size < 8:
+            raise RuntimeError(f"Temporary global GRIB is empty: {p}")
+        with p.open("rb") as f:
+            if f.read(4) != b"GRIB":
+                raise RuntimeError(f"Temporary global GRIB failed validation: {p}")
 
-    with open(global_path, "rb") as f:
-        if f.read(4) != b"GRIB":
-            raise RuntimeError("Temporary global GRIB failed GRIB validation.")
-
-    info_path = outdir / "ECMWF_CASPIAN_WAVE_INFO.txt"
-    info = [
-        "ECMWF Caspian Wave GRIB",
-        f"Source run: {run.strftime('%Y-%m-%d %H:00 UTC')}",
-        f"Forecast horizon: {args.days} days",
-        "Temporal resolution: 3-hourly through +144h, then 6-hourly",
-        "Fields: swh, mwd, mwp, pp1d",
-        "Source grid: ECMWF IFS-WAVE Open Data 0.25 degree global",
-        f"Caspian crop: lon {WEST}E to {EAST}E; lat {SOUTH}N to {NORTH}N",
-        f"Downloaded field count: {total_fields}",
-        "Source attribution: ECMWF Open Data",
-        "",
-        "Planning/visualisation support only. Not a replacement for type-approved ECDIS, official ENC, official warnings, or Master's navigational judgement.",
-    ]
-    info_path.write_text("\n".join(info) + "\n", encoding="utf-8")
+        info_path = outdir / f"ECMWF_CASPIAN_WAVE_{d}D_INFO.txt"
+        info = [
+            "ECMWF Caspian Wave GRIB",
+            f"Source run: {run_display}",
+            f"Forecast horizon: {d} days",
+            "Temporal resolution: 3-hourly through +144h, then 6-hourly",
+            "Fields: swh, mwd, mwp, pp1d",
+            "Source grid: ECMWF IFS-WAVE Open Data 0.25 degree global",
+            f"Caspian crop: lon {WEST}E to {EAST}E; lat {SOUTH}N to {NORTH}N",
+            f"Downloaded field count: {counts[d]}",
+            "Source attribution: ECMWF Open Data",
+            "",
+            "Planning/visualisation support only. Not a replacement for type-approved ECDIS, official ENC, official warnings, or Master's navigational judgement.",
+        ]
+        info_path.write_text("\n".join(info) + "\n", encoding="utf-8")
+        print(f"{d}D temporary global ready: {p} ({p.stat().st_size / 1024 / 1024:.1f} MiB)")
 
     write_github_output("run_id", run_id)
-    write_github_output("run_display", run.strftime("%Y-%m-%d %H:00 UTC"))
-    write_github_output("days", str(args.days))
-    write_github_output("global_file", str(global_path))
-    write_github_output("info_file", str(info_path))
-
-    print(
-        f"Temporary global file ready: {global_path} "
-        f"({global_path.stat().st_size / 1024 / 1024:.1f} MiB)"
-    )
+    write_github_output("run_display", run_display)
 
 
 if __name__ == "__main__":
