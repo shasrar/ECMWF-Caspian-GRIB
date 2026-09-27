@@ -1,0 +1,124 @@
+name: Build Caspian DWD GWAM GRIB
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: Forecast horizon
+        required: true
+        default: "5"
+        type: choice
+        options:
+          - "3"
+          - "5"
+          - "7"
+  schedule:
+    - cron: "30 5,17 * * *"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/gwam-caspian.yml"
+      - "scripts/build_gwam_caspian.py"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gwam-caspian-grib
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cdo libeccodes-tools
+          python -m pip install --upgrade pip
+          python -m pip install requests
+
+      - name: Select forecast horizon
+        id: cfg
+        shell: bash
+        run: |
+          DAYS="${{ inputs.days }}"
+          if [ -z "$DAYS" ]; then DAYS="5"; fi
+          echo "days=$DAYS" >> "$GITHUB_OUTPUT"
+
+      - name: Build DWD GWAM Caspian Wave
+        id: gwam
+        run: |
+          python scripts/build_gwam_caspian.py \
+            --days "${{ steps.cfg.outputs.days }}" \
+            --outdir output
+
+      - name: Validate GWAM GRIB
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s output/DWD_GWAM_CASPIAN_WAVE.grib2
+          test "$(head -c 4 output/DWD_GWAM_CASPIAN_WAVE.grib2)" = "GRIB"
+
+          COUNT="$(grib_count output/DWD_GWAM_CASPIAN_WAVE.grib2)"
+          test "$COUNT" -gt 0
+
+          EXPECTED="${{ steps.gwam.outputs.messages }}"
+          test "$COUNT" -eq "$EXPECTED"
+
+          echo "GWAM messages: $COUNT"
+          grib_ls -p shortName,dataDate,dataTime,stepRange,typeOfLevel \
+            output/DWD_GWAM_CASPIAN_WAVE.grib2 | head -n 140
+
+      - name: Upload short-lived artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DWD-GWAM-Caspian-${{ steps.gwam.outputs.run_id }}
+          path: |
+            output/DWD_GWAM_CASPIAN_WAVE.grib2
+            output/DWD_GWAM_CASPIAN_WAVE_INFO.txt
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Publish fixed GWAM latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gh release delete gwam-latest --yes --cleanup-tag || true
+
+          cat > output/GWAM_RELEASE_NOTES.md <<EOF
+          DWD GWAM global wave model cropped to the Caspian Sea.
+
+          Source run: ${{ steps.gwam.outputs.run_display }}
+          Forecast horizon: ${{ steps.cfg.outputs.days }} days
+          Area: 45E–56E, 35.5N–48.5N
+          Grid: 0.25 degree
+
+          Total sea: SWH, MWD, TM10
+          Wind sea: SHWW, MDWW, MPWW, PPWW
+          Swell: SHTS, MDTS, MPTS, PPTS
+          Wave-model wind: SP_10M, DD_10M
+
+          Generated automatically from DWD Open Data.
+          EOF
+
+          gh release create gwam-latest \
+            output/DWD_GWAM_CASPIAN_WAVE.grib2 \
+            output/DWD_GWAM_CASPIAN_WAVE_INFO.txt \
+            --title "Latest DWD GWAM Caspian — ${{ steps.gwam.outputs.run_display }}" \
+            --notes-file output/GWAM_RELEASE_NOTES.md \
+            --target "$GITHUB_SHA"
