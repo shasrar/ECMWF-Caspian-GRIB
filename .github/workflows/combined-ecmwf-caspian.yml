@@ -1,0 +1,195 @@
+name: Build Caspian GFS ECMWF Alternative Combined GRIB
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/combined-ecmwf-caspian.yml"
+  workflow_run:
+    workflows:
+      - "Build Caspian NOAA GFS Weather GRIB"
+      - "Build Caspian ECMWF Wave GRIB"
+    types:
+      - completed
+
+permissions:
+  contents: write
+
+concurrency:
+  group: combined-ecmwf-caspian
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Install ecCodes tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeccodes-tools
+
+      - name: Download latest GFS Weather and ECMWF Wave assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p input output
+
+          for DAYS in 3 5 7 10; do
+            gh release download gfs-latest \
+              --repo "$GITHUB_REPOSITORY" \
+              --dir input \
+              --pattern "GFS_CASPIAN_WEATHER_${DAYS}D.grib2" \
+              --pattern "GFS_CASPIAN_WEATHER_${DAYS}D_INFO.txt"
+
+            gh release download latest \
+              --repo "$GITHUB_REPOSITORY" \
+              --dir input \
+              --pattern "ECMWF_CASPIAN_WAVE_${DAYS}D.grib2" \
+              --pattern "ECMWF_CASPIAN_WAVE_${DAYS}D_INFO.txt"
+          done
+
+      - name: Build Alternative Combined GRIB files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for DAYS in 3 5 7 10; do
+            WEATHER="input/GFS_CASPIAN_WEATHER_${DAYS}D.grib2"
+            WAVE="input/ECMWF_CASPIAN_WAVE_${DAYS}D.grib2"
+            FINAL="output/CASPIAN_GFS_ECMWF_COMPLETE_${DAYS}D.grib2"
+            INFO="output/CASPIAN_GFS_ECMWF_COMPLETE_${DAYS}D_INFO.txt"
+
+            test -s "$WEATHER"
+            test -s "$WAVE"
+            test "$(head -c 4 "$WEATHER")" = "GRIB"
+            test "$(head -c 4 "$WAVE")" = "GRIB"
+
+            cat "$WEATHER" "$WAVE" > "$FINAL"
+
+            test -s "$FINAL"
+            test "$(head -c 4 "$FINAL")" = "GRIB"
+
+            WEATHER_COUNT="$(grib_count "$WEATHER")"
+            WAVE_COUNT="$(grib_count "$WAVE")"
+            FINAL_COUNT="$(grib_count "$FINAL")"
+            EXPECTED=$(( WEATHER_COUNT + WAVE_COUNT ))
+            test "$FINAL_COUNT" -eq "$EXPECTED"
+
+            NAMES="$(grib_get -p shortName "$FINAL" | sort -u)"
+            for REQUIRED in 10u 10v 2t 2d prmsl gust vis tp swh mwd mwp pp1d; do
+              echo "$NAMES" | grep -Fx "$REQUIRED" >/dev/null
+            done
+
+            GFS_RUN="$(grep -m1 '^Source run:' "input/GFS_CASPIAN_WEATHER_${DAYS}D_INFO.txt" | sed 's/^Source run:[[:space:]]*//')"
+            ECMWF_RUN="$(grep -m1 '^Source run:' "input/ECMWF_CASPIAN_WAVE_${DAYS}D_INFO.txt" | sed 's/^Source run:[[:space:]]*//')"
+            SIZE="$(du -h "$FINAL" | awk '{print $1}')"
+
+            cat > "$INFO" <<EOF
+Caspian GFS Weather + ECMWF Wave Alternative Combined GRIB
+Forecast horizon: ${DAYS} days
+Area: 45E-56E / 35.5N-48.5N
+
+Atmospheric source: NOAA/NCEP GFS
+GFS source run: ${GFS_RUN}
+Weather fields: 10m wind U/V, gust, MSLP, precipitation, visibility, 2m temperature, dew point
+
+Wave source: ECMWF IFS-WAVE
+ECMWF source run: ${ECMWF_RUN}
+Wave fields: SWH, MWD, MWP, PP1D
+
+GRIB messages: ${FINAL_COUNT}
+File size: ${SIZE}
+
+Comparison concept:
+Slot 1: GFS Weather + GWAM Wave
+Slot 2: GFS Weather + ECMWF Wave
+Atmospheric source is the same; wave model changes.
+
+Planning/visualisation support only. Not a replacement for type-approved ECDIS, official ENC/MSI/warnings, SMS, or Master's navigational judgement.
+EOF
+
+            echo "Alternative Combined ${DAYS}D: weather=${WEATHER_COUNT}, wave=${WAVE_COUNT}, total=${FINAL_COUNT}, size=${SIZE}"
+          done
+
+          cp output/CASPIAN_GFS_ECMWF_COMPLETE_7D.grib2 output/CASPIAN_GFS_ECMWF_COMPLETE.grib2
+          cp output/CASPIAN_GFS_ECMWF_COMPLETE_7D_INFO.txt output/CASPIAN_GFS_ECMWF_COMPLETE_INFO.txt
+
+      - name: Inspect Alternative Combined 7-day file
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Unique shortNames:"
+          grib_get -p shortName output/CASPIAN_GFS_ECMWF_COMPLETE_7D.grib2 | sort -u
+          echo
+          grib_ls -p shortName,dataDate,dataTime,stepRange,typeOfLevel \
+            output/CASPIAN_GFS_ECMWF_COMPLETE_7D.grib2 | head -n 160
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Caspian-GFS-ECMWF-Alternative-Combined
+          path: |
+            output/CASPIAN_GFS_ECMWF_COMPLETE_3D.grib2
+            output/CASPIAN_GFS_ECMWF_COMPLETE_3D_INFO.txt
+            output/CASPIAN_GFS_ECMWF_COMPLETE_5D.grib2
+            output/CASPIAN_GFS_ECMWF_COMPLETE_5D_INFO.txt
+            output/CASPIAN_GFS_ECMWF_COMPLETE_7D.grib2
+            output/CASPIAN_GFS_ECMWF_COMPLETE_7D_INFO.txt
+            output/CASPIAN_GFS_ECMWF_COMPLETE_10D.grib2
+            output/CASPIAN_GFS_ECMWF_COMPLETE_10D_INFO.txt
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Publish/update Alternative Combined release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          GFS_RUN="$(grep -m1 '^GFS source run:' output/CASPIAN_GFS_ECMWF_COMPLETE_7D_INFO.txt | sed 's/^GFS source run:[[:space:]]*//')"
+          ECMWF_RUN="$(grep -m1 '^ECMWF source run:' output/CASPIAN_GFS_ECMWF_COMPLETE_7D_INFO.txt | sed 's/^ECMWF source run:[[:space:]]*//')"
+
+          cat > output/ALT_RELEASE_NOTES.md <<EOF
+Caspian Alternative Combined GRIB.
+
+- NOAA GFS Weather: wind, gust, MSLP, precipitation, visibility, temperature, dew point
+- ECMWF IFS-WAVE: SWH, MWD, MWP, PP1D
+
+Available horizons: 3, 5, 7 and 10 days
+GFS source run: ${GFS_RUN}
+ECMWF source run: ${ECMWF_RUN}
+
+Designed for direct qtVlm comparison against the GFS Weather + GWAM Wave Combined product.
+EOF
+
+          if ! gh release view combined-ecmwf-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create combined-ecmwf-latest --repo "$GITHUB_REPOSITORY" \
+              --title "Latest GFS Weather + ECMWF Wave Alternative Combined" \
+              --notes-file output/ALT_RELEASE_NOTES.md \
+              --target "${GITHUB_SHA}"
+          fi
+
+          gh release upload combined-ecmwf-latest --repo "$GITHUB_REPOSITORY" \
+            output/CASPIAN_GFS_ECMWF_COMPLETE_3D.grib2 \
+            output/CASPIAN_GFS_ECMWF_COMPLETE_3D_INFO.txt \
+            output/CASPIAN_GFS_ECMWF_COMPLETE_5D.grib2 \
+            output/CASPIAN_GFS_ECMWF_COMPLETE_5D_INFO.txt \
+            output/CASPIAN_GFS_ECMWF_COMPLETE_7D.grib2 \
+            output/CASPIAN_GFS_ECMWF_COMPLETE_7D_INFO.txt \
+            output/CASPIAN_GFS_ECMWF_COMPLETE_10D.grib2 \
+            output/CASPIAN_GFS_ECMWF_COMPLETE_10D_INFO.txt \
+            output/CASPIAN_GFS_ECMWF_COMPLETE.grib2 \
+            output/CASPIAN_GFS_ECMWF_COMPLETE_INFO.txt \
+            --clobber
+
+          gh release edit combined-ecmwf-latest --repo "$GITHUB_REPOSITORY" \
+            --title "Latest GFS+ECMWF Combined — GFS ${GFS_RUN} / ECMWF ${ECMWF_RUN}" \
+            --notes-file output/ALT_RELEASE_NOTES.md
