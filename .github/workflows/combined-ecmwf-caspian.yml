@@ -1,4 +1,5 @@
 name: Build Caspian GFS ECMWF Alternative Combined GRIB
+# Alternative combined: same GFS weather, ECMWF wave
 
 on:
   workflow_dispatch:
