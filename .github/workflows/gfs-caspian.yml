@@ -2,17 +2,6 @@ name: Build Caspian NOAA GFS GRIB
 
 on:
   workflow_dispatch:
-    inputs:
-      days:
-        description: Forecast horizon
-        required: true
-        default: "5"
-        type: choice
-        options:
-          - "3"
-          - "5"
-          - "7"
-          - "10"
   schedule:
     - cron: "15 5,11,17,23 * * *"
   push:
@@ -32,7 +21,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 55
 
     steps:
       - name: Checkout
@@ -50,91 +39,112 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install requests
 
-      - name: Select forecast horizon
-        id: cfg
-        shell: bash
-        run: |
-          DAYS="${{ inputs.days }}"
-          if [ -z "$DAYS" ]; then DAYS="5"; fi
-          echo "days=$DAYS" >> "$GITHUB_OUTPUT"
-
-      - name: Build GFS Caspian Weather
+      - name: Build GFS Weather all horizons
         id: weather
         run: |
           python scripts/build_gfs_caspian.py \
             --mode weather \
-            --days "${{ steps.cfg.outputs.days }}" \
+            --all-horizons \
             --outdir output
 
-      - name: Validate GFS Weather
-        run: |
-          test -s output/GFS_CASPIAN_WEATHER.grib2
-          test "$(head -c 4 output/GFS_CASPIAN_WEATHER.grib2)" = "GRIB"
-          COUNT="$(grib_count output/GFS_CASPIAN_WEATHER.grib2)"
-          test "$COUNT" -gt 0
-          echo "Weather messages: $COUNT"
-          grib_ls -p shortName,dataDate,dataTime,stepRange,typeOfLevel \
-            output/GFS_CASPIAN_WEATHER.grib2 | head -n 100
-
-      - name: Build GFS Caspian Wave
+      - name: Build GFS Wave all horizons
         id: wave
         run: |
           python scripts/build_gfs_caspian.py \
             --mode wave \
-            --days "${{ steps.cfg.outputs.days }}" \
+            --all-horizons \
             --outdir output
 
-      - name: Validate GFS Wave
+      - name: Validate all GFS products
+        shell: bash
         run: |
-          test -s output/GFS_CASPIAN_WAVE.grib2
-          test "$(head -c 4 output/GFS_CASPIAN_WAVE.grib2)" = "GRIB"
-          COUNT="$(grib_count output/GFS_CASPIAN_WAVE.grib2)"
-          test "$COUNT" -gt 0
-          echo "Wave messages: $COUNT"
+          set -euo pipefail
+
+          for DAYS in 3 5 7 10; do
+            for KIND in WEATHER WAVE; do
+              FILE="output/GFS_CASPIAN_${KIND}_${DAYS}D.grib2"
+              test -s "$FILE"
+              test "$(head -c 4 "$FILE")" = "GRIB"
+              COUNT="$(grib_count "$FILE")"
+              test "$COUNT" -gt 0
+              echo "GFS ${KIND} ${DAYS}D: $COUNT messages"
+            done
+          done
+
+          cp output/GFS_CASPIAN_WEATHER_5D.grib2 output/GFS_CASPIAN_WEATHER.grib2
+          cp output/GFS_CASPIAN_WEATHER_5D_INFO.txt output/GFS_CASPIAN_WEATHER_INFO.txt
+          cp output/GFS_CASPIAN_WAVE_5D.grib2 output/GFS_CASPIAN_WAVE.grib2
+          cp output/GFS_CASPIAN_WAVE_5D_INFO.txt output/GFS_CASPIAN_WAVE_INFO.txt
+
           grib_ls -p shortName,dataDate,dataTime,stepRange,typeOfLevel \
-            output/GFS_CASPIAN_WAVE.grib2 | head -n 100
+            output/GFS_CASPIAN_WEATHER_10D.grib2 | head -n 100
+          grib_ls -p shortName,dataDate,dataTime,stepRange,typeOfLevel \
+            output/GFS_CASPIAN_WAVE_10D.grib2 | head -n 100
 
       - name: Upload short-lived artifact
         uses: actions/upload-artifact@v4
         with:
-          name: GFS-Caspian-${{ steps.weather.outputs.run_id }}
+          name: GFS-Caspian-All-Horizons-${{ steps.weather.outputs.run_id }}
           path: |
-            output/GFS_CASPIAN_WEATHER.grib2
-            output/GFS_CASPIAN_WEATHER_INFO.txt
-            output/GFS_CASPIAN_WAVE.grib2
-            output/GFS_CASPIAN_WAVE_INFO.txt
+            output/GFS_CASPIAN_WEATHER_*D.grib2
+            output/GFS_CASPIAN_WEATHER_*D_INFO.txt
+            output/GFS_CASPIAN_WAVE_*D.grib2
+            output/GFS_CASPIAN_WAVE_*D_INFO.txt
           retention-days: 7
           if-no-files-found: error
 
-      - name: Publish fixed GFS latest release
+      - name: Publish/update fixed GFS release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
 
-          gh release delete gfs-latest --yes --cleanup-tag || true
-
           cat > output/GFS_RELEASE_NOTES.md <<EOF
-          NOAA/NCEP GFS products cropped/subset to the Caspian Sea.
+          NOAA/NCEP GFS Caspian products.
 
           Weather run: ${{ steps.weather.outputs.run_display }}
           Wave run: ${{ steps.wave.outputs.run_display }}
-          Forecast horizon: ${{ steps.cfg.outputs.days }} days
+          Available forecast horizons: 3, 5, 7 and 10 days
           Area: 45E–56E, 35.5N–48.5N
           Grid: 0.25 degree
 
           Weather: 10 m wind, gust, MSLP, precipitation, visibility, 2 m temperature and dew point.
           Wave: significant combined wave height, primary wave direction and primary wave period.
 
-          Generated automatically from NOAA/NCEP NOMADS.
+          Unsuffixed files remain 5-day compatibility aliases.
           EOF
 
-          gh release create gfs-latest \
+          if ! gh release view gfs-latest >/dev/null 2>&1; then
+            gh release create gfs-latest \
+              --title "Latest NOAA GFS Caspian — ${{ steps.weather.outputs.run_display }}" \
+              --notes-file output/GFS_RELEASE_NOTES.md \
+              --target "$GITHUB_SHA"
+          fi
+
+          gh release upload gfs-latest \
+            output/GFS_CASPIAN_WEATHER_3D.grib2 \
+            output/GFS_CASPIAN_WEATHER_3D_INFO.txt \
+            output/GFS_CASPIAN_WEATHER_5D.grib2 \
+            output/GFS_CASPIAN_WEATHER_5D_INFO.txt \
+            output/GFS_CASPIAN_WEATHER_7D.grib2 \
+            output/GFS_CASPIAN_WEATHER_7D_INFO.txt \
+            output/GFS_CASPIAN_WEATHER_10D.grib2 \
+            output/GFS_CASPIAN_WEATHER_10D_INFO.txt \
+            output/GFS_CASPIAN_WAVE_3D.grib2 \
+            output/GFS_CASPIAN_WAVE_3D_INFO.txt \
+            output/GFS_CASPIAN_WAVE_5D.grib2 \
+            output/GFS_CASPIAN_WAVE_5D_INFO.txt \
+            output/GFS_CASPIAN_WAVE_7D.grib2 \
+            output/GFS_CASPIAN_WAVE_7D_INFO.txt \
+            output/GFS_CASPIAN_WAVE_10D.grib2 \
+            output/GFS_CASPIAN_WAVE_10D_INFO.txt \
             output/GFS_CASPIAN_WEATHER.grib2 \
             output/GFS_CASPIAN_WEATHER_INFO.txt \
             output/GFS_CASPIAN_WAVE.grib2 \
             output/GFS_CASPIAN_WAVE_INFO.txt \
+            --clobber
+
+          gh release edit gfs-latest \
             --title "Latest NOAA GFS Caspian — ${{ steps.weather.outputs.run_display }}" \
-            --notes-file output/GFS_RELEASE_NOTES.md \
-            --target "$GITHUB_SHA"
+            --notes-file output/GFS_RELEASE_NOTES.md
