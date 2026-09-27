@@ -1,0 +1,213 @@
+name: Build Caspian Combined Operational GRIB
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows:
+      - "Build Caspian NOAA GFS GRIB"
+      - "Build Caspian DWD GWAM GRIB"
+    types:
+      - completed
+
+permissions:
+  contents: write
+
+concurrency:
+  group: combined-caspian-operational
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Install ecCodes tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeccodes-tools
+
+      - name: Download latest GFS Weather and GWAM release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p input output
+
+          gh release download gfs-latest \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir input \
+            --pattern 'GFS_CASPIAN_WEATHER_3D.grib2' \
+            --pattern 'GFS_CASPIAN_WEATHER_3D_INFO.txt' \
+            --pattern 'GFS_CASPIAN_WEATHER_5D.grib2' \
+            --pattern 'GFS_CASPIAN_WEATHER_5D_INFO.txt' \
+            --pattern 'GFS_CASPIAN_WEATHER_7D.grib2' \
+            --pattern 'GFS_CASPIAN_WEATHER_7D_INFO.txt'
+
+          gh release download gwam-latest \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir input \
+            --pattern 'DWD_GWAM_CASPIAN_WAVE_3D.grib2' \
+            --pattern 'DWD_GWAM_CASPIAN_WAVE_3D_INFO.txt' \
+            --pattern 'DWD_GWAM_CASPIAN_WAVE_5D.grib2' \
+            --pattern 'DWD_GWAM_CASPIAN_WAVE_5D_INFO.txt' \
+            --pattern 'DWD_GWAM_CASPIAN_WAVE_7D.grib2' \
+            --pattern 'DWD_GWAM_CASPIAN_WAVE_7D_INFO.txt'
+
+      - name: Build Combined Operational GRIB files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          WAVE_SHORTNAMES='swh/mwd/mwp/shww/wvdir/mpww/PPWW/shts/swdir/mpts/PPTS'
+
+          for DAYS in 3 5 7; do
+            WEATHER="input/GFS_CASPIAN_WEATHER_${DAYS}D.grib2"
+            GWAM="input/DWD_GWAM_CASPIAN_WAVE_${DAYS}D.grib2"
+            WAVE_ONLY="output/GWAM_WAVE_ONLY_${DAYS}D.grib2"
+            FINAL="output/CASPIAN_MARINE_COMPLETE_${DAYS}D.grib2"
+            INFO="output/CASPIAN_MARINE_COMPLETE_${DAYS}D_INFO.txt"
+
+            test -s "$WEATHER"
+            test -s "$GWAM"
+            test "$(head -c 4 "$WEATHER")" = "GRIB"
+            test "$(head -c 4 "$GWAM")" = "GRIB"
+
+            grib_copy -w shortName="$WAVE_SHORTNAMES" "$GWAM" "$WAVE_ONLY"
+
+            WAVE_COUNT="$(grib_count "$WAVE_ONLY")"
+            EXPECTED_WAVE=$(( (DAYS * 24 / 3 + 1) * 11 ))
+            test "$WAVE_COUNT" -eq "$EXPECTED_WAVE"
+
+            cat "$WEATHER" "$WAVE_ONLY" > "$FINAL"
+            test -s "$FINAL"
+            test "$(head -c 4 "$FINAL")" = "GRIB"
+
+            WEATHER_COUNT="$(grib_count "$WEATHER")"
+            FINAL_COUNT="$(grib_count "$FINAL")"
+            EXPECTED_FINAL=$(( WEATHER_COUNT + WAVE_COUNT ))
+            test "$FINAL_COUNT" -eq "$EXPECTED_FINAL"
+
+            NAMES="$(grib_get -p shortName "$FINAL" | sort -u)"
+            for REQUIRED in 10u 10v 2t 2d prmsl gust vis tp swh mwd mwp shww wvdir mpww PPWW shts swdir mpts PPTS; do
+              echo "$NAMES" | grep -Fx "$REQUIRED" >/dev/null
+            done
+
+            if echo "$NAMES" | grep -Fx '10si' >/dev/null; then
+              echo "Unexpected GWAM 10si retained" >&2
+              exit 1
+            fi
+            if echo "$NAMES" | grep -Fx '10wdir' >/dev/null; then
+              echo "Unexpected GWAM 10wdir retained" >&2
+              exit 1
+            fi
+
+            GFS_RUN="$(grep -m1 '^Source run:' "input/GFS_CASPIAN_WEATHER_${DAYS}D_INFO.txt" | sed 's/^Source run:[[:space:]]*//')"
+            GWAM_RUN="$(grep -m1 '^Source run:' "input/DWD_GWAM_CASPIAN_WAVE_${DAYS}D_INFO.txt" | sed 's/^Source run:[[:space:]]*//')"
+            SIZE="$(du -h "$FINAL" | awk '{print $1}')"
+
+            cat > "$INFO" <<EOF
+          Caspian Marine Complete Operational GRIB
+          Forecast horizon: ${DAYS} days
+          Area: 45E-56E / 35.5N-48.5N
+
+          Atmospheric source: NOAA/NCEP GFS
+          GFS source run: ${GFS_RUN}
+          Weather fields: 10m wind U/V, gust, MSLP, precipitation, visibility, 2m temperature, dew point
+
+          Wave source: DWD GWAM
+          GWAM source run: ${GWAM_RUN}
+          Total sea: SWH, MWD, mean period
+          Wind sea: height, direction, period, peak period
+          Swell: height, direction, period, peak period
+          GWAM 10m wind fields intentionally excluded to avoid duplicate wind sources.
+
+          GRIB messages: ${FINAL_COUNT}
+          File size: ${SIZE}
+
+          Operational concept:
+          Main file = GFS Weather + GWAM Wave
+          Cross-check separately with ECMWF Wave and GFS Wave.
+
+          Planning/visualisation support only. Not a replacement for type-approved ECDIS, official ENC/MSI/warnings, SMS, or Master's navigational judgement.
+          EOF
+
+            echo "Combined ${DAYS}D: weather=${WEATHER_COUNT}, wave=${WAVE_COUNT}, total=${FINAL_COUNT}, size=${SIZE}"
+          done
+
+          cp output/CASPIAN_MARINE_COMPLETE_7D.grib2 output/CASPIAN_MARINE_COMPLETE.grib2
+          cp output/CASPIAN_MARINE_COMPLETE_7D_INFO.txt output/CASPIAN_MARINE_COMPLETE_INFO.txt
+
+      - name: Inspect combined 7-day file
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Unique shortNames:"
+          grib_get -p shortName output/CASPIAN_MARINE_COMPLETE_7D.grib2 | sort -u
+          echo
+          echo "Sample messages:"
+          grib_ls -p shortName,dataDate,dataTime,stepRange,typeOfLevel \
+            output/CASPIAN_MARINE_COMPLETE_7D.grib2 | head -n 160
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Caspian-Marine-Complete-Operational
+          path: |
+            output/CASPIAN_MARINE_COMPLETE_3D.grib2
+            output/CASPIAN_MARINE_COMPLETE_3D_INFO.txt
+            output/CASPIAN_MARINE_COMPLETE_5D.grib2
+            output/CASPIAN_MARINE_COMPLETE_5D_INFO.txt
+            output/CASPIAN_MARINE_COMPLETE_7D.grib2
+            output/CASPIAN_MARINE_COMPLETE_7D_INFO.txt
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Publish/update combined release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          GFS_RUN="$(grep -m1 '^GFS source run:' output/CASPIAN_MARINE_COMPLETE_7D_INFO.txt | sed 's/^GFS source run:[[:space:]]*//')"
+          GWAM_RUN="$(grep -m1 '^GWAM source run:' output/CASPIAN_MARINE_COMPLETE_7D_INFO.txt | sed 's/^GWAM source run:[[:space:]]*//')"
+
+          cat > output/COMBINED_RELEASE_NOTES.md <<EOF
+          Caspian Marine Complete Operational GRIB.
+
+          Main operational composition:
+          - NOAA GFS Weather: wind, gust, MSLP, precipitation, visibility, temperature, dew point
+          - DWD GWAM Wave: Total Sea, Wind Sea and Swell
+          - GWAM 10m wind excluded to avoid duplicate wind sources
+
+          Available horizons: 3, 5 and 7 days
+          GFS source run: ${GFS_RUN}
+          GWAM source run: ${GWAM_RUN}
+
+          ECMWF Wave and GFS Wave remain separate cross-check products.
+          EOF
+
+          if ! gh release view combined-latest >/dev/null 2>&1; then
+            gh release create combined-latest \
+              --title "Latest Caspian Marine Complete Operational GRIB" \
+              --notes-file output/COMBINED_RELEASE_NOTES.md \
+              --target "${GITHUB_SHA}"
+          fi
+
+          gh release upload combined-latest \
+            output/CASPIAN_MARINE_COMPLETE_3D.grib2 \
+            output/CASPIAN_MARINE_COMPLETE_3D_INFO.txt \
+            output/CASPIAN_MARINE_COMPLETE_5D.grib2 \
+            output/CASPIAN_MARINE_COMPLETE_5D_INFO.txt \
+            output/CASPIAN_MARINE_COMPLETE_7D.grib2 \
+            output/CASPIAN_MARINE_COMPLETE_7D_INFO.txt \
+            output/CASPIAN_MARINE_COMPLETE.grib2 \
+            output/CASPIAN_MARINE_COMPLETE_INFO.txt \
+            --clobber
+
+          gh release edit combined-latest \
+            --title "Latest Caspian Marine Complete — GFS ${GFS_RUN} / GWAM ${GWAM_RUN}" \
+            --notes-file output/COMBINED_RELEASE_NOTES.md
