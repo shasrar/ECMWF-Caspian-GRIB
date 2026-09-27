@@ -97,9 +97,16 @@ jobs:
           Direct validation showed the returned GFS Wave fields over the Caspian subset contain only missing values.
           EOF
 
-          gh release delete gfs-latest --yes --cleanup-tag || true
+          if ! gh release view gfs-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create gfs-latest \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Latest NOAA GFS Caspian Weather — ${{ steps.weather.outputs.run_display }}" \
+              --notes-file output/GFS_RELEASE_NOTES.md \
+              --target "$GITHUB_SHA"
+          fi
 
-          gh release create gfs-latest \
+          gh release upload gfs-latest \
+            --repo "$GITHUB_REPOSITORY" \
             output/GFS_CASPIAN_WEATHER_3D.grib2 \
             output/GFS_CASPIAN_WEATHER_3D_INFO.txt \
             output/GFS_CASPIAN_WEATHER_5D.grib2 \
@@ -110,6 +117,9 @@ jobs:
             output/GFS_CASPIAN_WEATHER_10D_INFO.txt \
             output/GFS_CASPIAN_WEATHER.grib2 \
             output/GFS_CASPIAN_WEATHER_INFO.txt \
+            --clobber
+
+          gh release edit gfs-latest \
+            --repo "$GITHUB_REPOSITORY" \
             --title "Latest NOAA GFS Caspian Weather — ${{ steps.weather.outputs.run_display }}" \
-            --notes-file output/GFS_RELEASE_NOTES.md \
-            --target "$GITHUB_SHA"
+            --notes-file output/GFS_RELEASE_NOTES.md
