@@ -1,93 +1,88 @@
 # Caspian Marine GRIB
 
-Automatically builds small **Caspian Sea-only GRIB2** products for qtVlm and other GRIB2 viewers.
+Small **Caspian Sea-only GRIB2** products for qtVlm and other GRIB2 viewers.
 
-## Operational concept
+## Recommended qtVlm comparison
 
-### Main operational file — Combined
+### Slot 1 — Combined A
 **NOAA GFS Weather + DWD GWAM Wave**
 
-- GFS provides atmosphere/weather.
-- GWAM provides Total Sea, Wind Sea and Swell.
-- GWAM 10 m wind is excluded from the Combined file to avoid duplicate wind sources.
+### Slot 2 — Combined B
+**NOAA GFS Weather + ECMWF IFS-WAVE**
 
-### Independent wave cross-check
-**ECMWF IFS-WAVE**
+Both files use GFS for the atmospheric fields, so the comparison is designed to isolate the wave-model difference as much as practical.
 
-### NOAA GFS Wave
+The downloader can also report:
+- source-run freshness for GFS / GWAM / ECMWF,
+- whether the two Combined files use the same GFS Weather run,
+- the common valid-time overlap for comparison,
+- the GWAM vs ECMWF initialization-time difference.
+
+## Products
+
+### Combined A
+Tag: `combined-latest`
+
+Weather:
+- 10 m wind
+- gust
+- MSLP
+- precipitation
+- visibility
+- 2 m temperature
+- dew point
+
+Wave:
+- GWAM Total Sea
+- Wind Sea
+- Swell
+- directions and periods
+
+Horizons: **3 / 5 / 7 days**
+
+### Combined B
+Tag: `combined-ecmwf-latest`
+
+Same GFS Weather fields as above.
+
+Wave:
+- ECMWF SWH
+- MWD
+- MWP
+- PP1D
+
+Horizons: **3 / 5 / 7 / 10 days**
+
+### Standalone products
+- ECMWF Wave: `latest`
+- GFS Weather: `gfs-latest`
+- GWAM Wave: `gwam-latest`
+
+## NOAA GFS Wave
+
 **Not used for the Caspian Sea.**
 
-Direct ecCodes validation of the Caspian subset showed that the GFS Wave messages contained only missing values over the Caspian area. GFS Wave is therefore deliberately excluded from the downloader, automated build and published GFS release.
+Direct ecCodes inspection of the generated Caspian subset showed that the GFS Wave messages contained only missing values over the area, so GFS Wave is excluded from the downloader and Caspian GFS workflow.
 
-## Direct latest downloads
+## Coverage
 
-### Combined Operational
-https://github.com/shasrar/ECMWF-Caspian-GRIB/releases/download/combined-latest/CASPIAN_MARINE_COMPLETE.grib2
+**45°E–56°E, 35.5°N–48.5°N**
 
-### ECMWF IFS-WAVE
-https://github.com/shasrar/ECMWF-Caspian-GRIB/releases/download/latest/ECMWF_CASPIAN_WAVE.grib2
+## Downloader workflow
 
-### NOAA GFS Weather
-https://github.com/shasrar/ECMWF-Caspian-GRIB/releases/download/gfs-latest/GFS_CASPIAN_WEATHER.grib2
+Basic mode:
+- Combined A and Combined B only
+- Refresh comparison metadata
+- Download Comparison Pair
 
-### DWD GWAM
-https://github.com/shasrar/ECMWF-Caspian-GRIB/releases/download/gwam-latest/DWD_GWAM_CASPIAN_WAVE.grib2
+Advanced mode:
+- standalone ECMWF Wave
+- standalone GFS Weather
+- standalone GWAM Wave
+- selective downloads
 
-## Common coverage
-
-- Area: **45°E–56°E, 35.5°N–48.5°N**
-- Intended for Caspian Sea voyage/weather planning
-
-## Forecast horizons
-
-- Combined Operational: **3 / 5 / 7 days**
-- DWD GWAM: **3 / 5 / 7 days**
-- ECMWF Wave: **3 / 5 / 7 / 10 days**
-- GFS Weather: **3 / 5 / 7 / 10 days**
-
-## ECMWF wave
-
-Source: ECMWF IFS-WAVE Open Data, 0.25°.
-
-Fields:
-- swh — significant wave height
-- mwd — mean wave direction
-- mwp — mean wave period
-- pp1d — peak wave period
-
-## NOAA GFS weather
-
-Source: NOAA/NCEP GFS 0.25° via NOMADS GRIB Filter.
-
-Fields:
-- 10u, 10v — 10 m wind vector
-- gust — surface wind gust
-- prmsl — mean sea-level pressure
-- tp — precipitation
-- vis — visibility
-- 2t — 2 m air temperature
-- 2d — 2 m dew point
-
-## DWD GWAM
-
-Source: DWD GWAM global wave model, 0.25° Open Data.
-
-Fields:
-- Total sea: swh, mwd, mwp
-- Wind sea: shww, wvdir, mpww, PPWW
-- Swell: shts, swdir, mpts, PPTS
-- Wave-model wind exists in standalone GWAM, but is intentionally excluded from the Combined product.
-
-## qtVlm
-
-Recommended:
-- **GRIB Slot 1:** Combined Operational
-- **GRIB Slot 2:** ECMWF Wave for independent cross-check
-
-Open files with:
-
-Data → GRIB Slot → Open/Load
+Default horizon: **7 days**
 
 ## Navigation notice
 
-These products are planning and visualisation aids only. They do not replace type-approved ECDIS, official ENC, official meteorological warnings, MSI, company procedures, or the Master's navigational judgement.
+These files are planning and visualisation aids only. They do not replace type-approved ECDIS, official ENC, official meteorological warnings, MSI, company procedures, or the Master's navigational judgement.
