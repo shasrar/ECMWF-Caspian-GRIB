@@ -74,3 +74,22 @@ Open files with:
 ## Navigation notice
 
 These products are planning and visualisation aids only. They do not replace type-approved ECDIS, official ENC, official meteorological warnings, MSI, company procedures, or the Master's navigational judgement.
+
+
+## DWD GWAM
+
+Source: DWD GWAM global wave model, 0.25° Open Data.
+
+Direct latest download:
+
+https://github.com/shasrar/ECMWF-Caspian-GRIB/releases/download/gwam-latest/DWD_GWAM_CASPIAN_WAVE.grib2
+
+Fields:
+- Total sea: `swh`, `mwd`, `mwp` (DWD source directory `tm10`)
+- Wind sea: `shww`, `wvdir` (DWD `mdww`), `mpww`, `PPWW`
+- Swell: `shts`, `swdir` (DWD `mdts`), `mpts`, `PPTS`
+- Wave-model wind: `10si` (DWD `sp_10m`), `10wdir` (DWD `dd_10m`)
+
+The GWAM workflow downloads each compressed DWD global field temporarily on GitHub Actions, decompresses it, crops it immediately to the Caspian Sea, discards the global field, and publishes only the final Caspian GRIB2.
+
+GWAM scheduled build: twice daily, with fallback to the latest complete 00/12 UTC run.
