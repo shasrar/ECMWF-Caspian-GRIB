@@ -1,0 +1,44 @@
+name: Diagnose GFS Wave Caspian Coverage
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/diagnose-gfswave-caspian.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Install ecCodes
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeccodes-tools
+
+      - name: Download current Caspian GFS Wave 7D
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download gfs-latest \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "GFS_CASPIAN_WAVE_7D.grib2" \
+            --dir .
+
+      - name: Inspect data values
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "File size:"
+          ls -lh GFS_CASPIAN_WAVE_7D.grib2
+          echo
+          echo "Message count:"
+          grib_count GFS_CASPIAN_WAVE_7D.grib2
+          echo
+          echo "Per-message statistics:"
+          grib_ls -p shortName,stepRange,numberOfDataPoints,numberOfMissing,numberOfValues,bitmapPresent,minimum,maximum \
+            GFS_CASPIAN_WAVE_7D.grib2 | head -n 80
