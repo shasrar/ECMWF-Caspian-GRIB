@@ -92,29 +92,29 @@ jobs:
             ECMWF_RUN="$(grep -m1 '^Source run:' "input/ECMWF_CASPIAN_WAVE_${DAYS}D_INFO.txt" | sed 's/^Source run:[[:space:]]*//')"
             SIZE="$(du -h "$FINAL" | awk '{print $1}')"
 
-            cat > "$INFO" <<EOF
-            Caspian GFS Weather + ECMWF Wave Alternative Combined GRIB
-            Forecast horizon: ${DAYS} days
-            Area: 45E-56E / 35.5N-48.5N
-            
-            Atmospheric source: NOAA/NCEP GFS
-            GFS source run: ${GFS_RUN}
-            Weather fields: 10m wind U/V, gust, MSLP, precipitation, visibility, 2m temperature, dew point
-            
-            Wave source: ECMWF IFS-WAVE
-            ECMWF source run: ${ECMWF_RUN}
-            Wave fields: SWH, MWD, MWP, PP1D
-            
-            GRIB messages: ${FINAL_COUNT}
-            File size: ${SIZE}
-            
-            Comparison concept:
-            Slot 1: GFS Weather + GWAM Wave
-            Slot 2: GFS Weather + ECMWF Wave
-            Atmospheric source is the same; wave model changes.
-            
-            Planning/visualisation support only. Not a replacement for type-approved ECDIS, official ENC/MSI/warnings, SMS, or Master's navigational judgement.
-            EOF
+            {
+              echo "Caspian GFS Weather + ECMWF Wave Alternative Combined GRIB"
+              echo "Forecast horizon: ${DAYS} days"
+              echo "Area: 45E-56E / 35.5N-48.5N"
+              echo
+              echo "Atmospheric source: NOAA/NCEP GFS"
+              echo "GFS source run: ${GFS_RUN}"
+              echo "Weather fields: 10m wind U/V, gust, MSLP, precipitation, visibility, 2m temperature, dew point"
+              echo
+              echo "Wave source: ECMWF IFS-WAVE"
+              echo "ECMWF source run: ${ECMWF_RUN}"
+              echo "Wave fields: SWH, MWD, MWP, PP1D"
+              echo
+              echo "GRIB messages: ${FINAL_COUNT}"
+              echo "File size: ${SIZE}"
+              echo
+              echo "Comparison concept:"
+              echo "Slot 1: GFS Weather + GWAM Wave"
+              echo "Slot 2: GFS Weather + ECMWF Wave"
+              echo "Atmospheric source is the same; wave model changes."
+              echo
+              echo "Planning/visualisation support only. Not a replacement for type-approved ECDIS, official ENC/MSI/warnings, SMS, or Master's navigational judgement."
+            } > "$INFO"
 
             echo "Alternative Combined ${DAYS}D: weather=${WEATHER_COUNT}, wave=${WAVE_COUNT}, total=${FINAL_COUNT}, size=${SIZE}"
           done
@@ -158,18 +158,18 @@ jobs:
           GFS_RUN="$(grep -m1 '^GFS source run:' output/CASPIAN_GFS_ECMWF_COMPLETE_7D_INFO.txt | sed 's/^GFS source run:[[:space:]]*//')"
           ECMWF_RUN="$(grep -m1 '^ECMWF source run:' output/CASPIAN_GFS_ECMWF_COMPLETE_7D_INFO.txt | sed 's/^ECMWF source run:[[:space:]]*//')"
 
-          cat > output/ALT_RELEASE_NOTES.md <<EOF
-          Caspian Alternative Combined GRIB.
-          
-          - NOAA GFS Weather: wind, gust, MSLP, precipitation, visibility, temperature, dew point
-          - ECMWF IFS-WAVE: SWH, MWD, MWP, PP1D
-          
-          Available horizons: 3, 5, 7 and 10 days
-          GFS source run: ${GFS_RUN}
-          ECMWF source run: ${ECMWF_RUN}
-          
-          Designed for direct qtVlm comparison against the GFS Weather + GWAM Wave Combined product.
-          EOF
+          {
+            echo "Caspian Alternative Combined GRIB."
+            echo
+            echo "- NOAA GFS Weather: wind, gust, MSLP, precipitation, visibility, temperature, dew point"
+            echo "- ECMWF IFS-WAVE: SWH, MWD, MWP, PP1D"
+            echo
+            echo "Available horizons: 3, 5, 7 and 10 days"
+            echo "GFS source run: ${GFS_RUN}"
+            echo "ECMWF source run: ${ECMWF_RUN}"
+            echo
+            echo "Designed for direct qtVlm comparison against the GFS Weather + GWAM Wave Combined product."
+          } > output/ALT_RELEASE_NOTES.md
 
           if ! gh release view combined-ecmwf-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create combined-ecmwf-latest --repo "$GITHUB_REPOSITORY" \
