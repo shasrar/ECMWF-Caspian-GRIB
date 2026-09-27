@@ -209,8 +209,8 @@ def main():
         )
         print(f"DONE GWAM {d}D: {paths[d]} ({paths[d].stat().st_size} bytes, {counts[d]} messages)")
 
-    write_github_output("run_id", run_id)
-    write_github_output("run_display", run_display)
+    github_output("run_id", run_id)
+    github_output("run_display", run_display)
 
 
 if __name__ == "__main__":
