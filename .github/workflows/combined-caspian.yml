@@ -195,14 +195,14 @@ jobs:
           ECMWF Wave and GFS Wave remain separate cross-check products.
           EOF
 
-          if ! gh release view combined-latest >/dev/null 2>&1; then
-            gh release create combined-latest \
+          if ! gh release view combined-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create combined-latest --repo "$GITHUB_REPOSITORY" \
               --title "Latest Caspian Marine Complete Operational GRIB" \
               --notes-file output/COMBINED_RELEASE_NOTES.md \
               --target "${GITHUB_SHA}"
           fi
 
-          gh release upload combined-latest \
+          gh release upload combined-latest --repo "$GITHUB_REPOSITORY" \
             output/CASPIAN_MARINE_COMPLETE_3D.grib2 \
             output/CASPIAN_MARINE_COMPLETE_3D_INFO.txt \
             output/CASPIAN_MARINE_COMPLETE_5D.grib2 \
@@ -213,6 +213,6 @@ jobs:
             output/CASPIAN_MARINE_COMPLETE_INFO.txt \
             --clobber
 
-          gh release edit combined-latest \
+          gh release edit combined-latest --repo "$GITHUB_REPOSITORY" \
             --title "Latest Caspian Marine Complete — GFS ${GFS_RUN} / GWAM ${GWAM_RUN}" \
             --notes-file output/COMBINED_RELEASE_NOTES.md
