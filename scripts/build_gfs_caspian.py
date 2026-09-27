@@ -9,40 +9,13 @@ import requests
 
 NOMADS = "https://nomads.ncep.noaa.gov/cgi-bin"
 WEST, EAST, SOUTH, NORTH = 45.0, 56.0, 35.5, 48.5
+HORIZONS = (3, 5, 7, 10)
 
 WEATHER_GROUPS = [
-    (
-        "wind10m",
-        {
-            "var_UGRD": "on",
-            "var_VGRD": "on",
-            "lev_10_m_above_ground": "on",
-        },
-    ),
-    (
-        "temp2m",
-        {
-            "var_TMP": "on",
-            "var_DPT": "on",
-            "lev_2_m_above_ground": "on",
-        },
-    ),
-    (
-        "mslp",
-        {
-            "var_PRMSL": "on",
-            "lev_mean_sea_level": "on",
-        },
-    ),
-    (
-        "surface",
-        {
-            "var_GUST": "on",
-            "var_APCP": "on",
-            "var_VIS": "on",
-            "lev_surface": "on",
-        },
-    ),
+    ("wind10m", {"var_UGRD": "on", "var_VGRD": "on", "lev_10_m_above_ground": "on"}),
+    ("temp2m", {"var_TMP": "on", "var_DPT": "on", "lev_2_m_above_ground": "on"}),
+    ("mslp", {"var_PRMSL": "on", "lev_mean_sea_level": "on"}),
+    ("surface", {"var_GUST": "on", "var_APCP": "on", "var_VIS": "on", "lev_surface": "on"}),
 ]
 
 WAVE_PARAMS = {
@@ -143,40 +116,6 @@ def github_output(key, value):
             f.write(f"{key}={value}\n")
 
 
-def build_weather(session, run, steps, path):
-    request_count = 0
-    with open(path, "wb") as out:
-        for i, step in enumerate(steps, start=1):
-            print(f"[weather {i}/{len(steps)}] +{step:03d}h")
-            for group_name, group_params in WEATHER_GROUPS:
-                url, params = weather_request(run, step, group_params)
-                try:
-                    data = fetch_grib(session, url, params)
-                    out.write(data)
-                    request_count += 1
-                except Exception as exc:
-                    # Some accumulated fields can be absent at f000.
-                    if step == 0 and group_name == "surface":
-                        print(f"  surface group at f000 skipped: {exc}")
-                        continue
-                    raise
-                time.sleep(0.12)
-    return request_count
-
-
-def build_wave(session, run, steps, path):
-    request_count = 0
-    with open(path, "wb") as out:
-        for i, step in enumerate(steps, start=1):
-            print(f"[wave {i}/{len(steps)}] +{step:03d}h")
-            url, params = wave_request(run, step)
-            data = fetch_grib(session, url, params)
-            out.write(data)
-            request_count += 1
-            time.sleep(0.12)
-    return request_count
-
-
 def validate_file(path):
     p = Path(path)
     if not p.exists() or p.stat().st_size < 8:
@@ -186,72 +125,97 @@ def validate_file(path):
             raise RuntimeError(f"Output does not start with GRIB: {p}")
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--mode", choices=("weather", "wave"), required=True)
-    ap.add_argument("--days", type=int, choices=(3, 5, 7, 10), default=5)
-    ap.add_argument("--outdir", default="output")
-    args = ap.parse_args()
+def build_multi(session, run, mode, horizons, outdir):
+    max_days = max(horizons)
+    steps = steps_for(max_days)
+    prefix = "GFS_CASPIAN_WEATHER" if mode == "weather" else "GFS_CASPIAN_WAVE"
+    paths = {d: outdir / f"{prefix}_{d}D.grib2" for d in horizons}
+    handles = {d: open(paths[d], "wb") for d in horizons}
+    counts = {d: 0 for d in horizons}
 
-    outdir = Path(args.outdir)
-    outdir.mkdir(parents=True, exist_ok=True)
+    try:
+        for i, step in enumerate(steps, start=1):
+            print(f"[{mode} {i}/{len(steps)}] +{step:03d}h")
+            if mode == "weather":
+                requests_this_step = []
+                for group_name, group_params in WEATHER_GROUPS:
+                    url, params = weather_request(run, step, group_params)
+                    try:
+                        data = fetch_grib(session, url, params)
+                        requests_this_step.append(data)
+                    except Exception as exc:
+                        if step == 0 and group_name == "surface":
+                            print(f"  surface group at f000 skipped: {exc}")
+                            continue
+                        raise
+                    time.sleep(0.10)
+            else:
+                url, params = wave_request(run, step)
+                requests_this_step = [fetch_grib(session, url, params)]
+                time.sleep(0.10)
 
-    steps = steps_for(args.days)
-    session = requests.Session()
-    session.headers.update(
-        {
-            "User-Agent": "ECMWF-Caspian-GRIB/GFS-builder-1.0",
-            "Accept": "*/*",
-        }
+            for d in horizons:
+                if step <= d * 24:
+                    for data in requests_this_step:
+                        handles[d].write(data)
+                        counts[d] += 1
+    finally:
+        for h in handles.values():
+            h.close()
+
+    fields = (
+        "UGRD/VGRD 10m, TMP/DPT 2m, PRMSL, GUST, APCP, VIS"
+        if mode == "weather"
+        else "HTSGW, PERPW, DIRPW"
     )
-
-    run = find_latest_complete(session, args.mode, steps[-1])
-    run_id = run.strftime("%Y%m%d_%H") + "Z"
     run_display = run.strftime("%Y-%m-%d %H:00 UTC")
 
-    if args.mode == "weather":
-        final = outdir / "GFS_CASPIAN_WEATHER.grib2"
-        count = build_weather(session, run, steps, final)
-        fields = "UGRD/VGRD 10m, TMP/DPT 2m, PRMSL, GUST, APCP, VIS"
-    else:
-        final = outdir / "GFS_CASPIAN_WAVE.grib2"
-        count = build_wave(session, run, steps, final)
-        fields = "HTSGW, PERPW, DIRPW"
-
-    validate_file(final)
-
-    info = outdir / (
-        "GFS_CASPIAN_WEATHER_INFO.txt"
-        if args.mode == "weather"
-        else "GFS_CASPIAN_WAVE_INFO.txt"
-    )
-    info.write_text(
-        "\n".join(
-            [
-                f"NOAA GFS Caspian {args.mode.title()} GRIB",
+    for d in horizons:
+        validate_file(paths[d])
+        info = outdir / f"{prefix}_{d}D_INFO.txt"
+        info.write_text(
+            "\n".join([
+                f"NOAA GFS Caspian {mode.title()} GRIB",
                 f"Source run: {run_display}",
-                f"Forecast horizon: {args.days} days",
+                f"Forecast horizon: {d} days",
                 "Temporal resolution: 3-hourly",
                 "Source grid: 0.25 degree",
                 f"Area: lon {WEST}E to {EAST}E; lat {SOUTH}N to {NORTH}N",
                 f"Fields: {fields}",
-                f"NOMADS subset requests written: {count}",
-                f"Output size: {final.stat().st_size} bytes",
+                f"NOMADS subset requests written: {counts[d]}",
+                f"Output size: {paths[d].stat().st_size} bytes",
                 "Source: NOAA/NCEP NOMADS",
                 "",
                 "Planning/visualisation support only. Not a replacement for type-approved ECDIS, official ENC, official warnings, or Master's navigational judgement.",
-            ]
+            ]) + "\n",
+            encoding="utf-8",
         )
-        + "\n",
-        encoding="utf-8",
-    )
+        print(f"DONE {mode} {d}D: {paths[d]} ({paths[d].stat().st_size} bytes)")
 
-    github_output("run_id", run_id)
-    github_output("run_display", run_display)
-    github_output("file", str(final))
-    github_output("info", str(info))
-    github_output("size", str(final.stat().st_size))
-    print(f"DONE: {final} ({final.stat().st_size} bytes)")
+    return run
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--mode", choices=("weather", "wave"), required=True)
+    ap.add_argument("--days", type=int, choices=HORIZONS, default=5)
+    ap.add_argument("--all-horizons", action="store_true")
+    ap.add_argument("--outdir", default="output")
+    args = ap.parse_args()
+
+    horizons = list(HORIZONS) if args.all_horizons else [args.days]
+    outdir = Path(args.outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    session = requests.Session()
+    session.headers.update({"User-Agent": "Caspian-Marine-GRIB/GFS-builder-1.1", "Accept": "*/*"})
+
+    max_days = max(horizons)
+    run = find_latest_complete(session, args.mode, max_days * 24)
+    build_multi(session, run, args.mode, horizons, outdir)
+
+    github_output("run_id", run.strftime("%Y%m%d_%H") + "Z")
+    github_output("run_display", run.strftime("%Y-%m-%d %H:00 UTC"))
 
 
 if __name__ == "__main__":
