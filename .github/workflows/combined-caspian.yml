@@ -9,7 +9,7 @@ on:
       - ".github/workflows/combined-caspian.yml"
   workflow_run:
     workflows:
-      - "Build Caspian NOAA GFS GRIB"
+      - "Build Caspian NOAA GFS Weather GRIB"
       - "Build Caspian DWD GWAM GRIB"
     types:
       - completed
