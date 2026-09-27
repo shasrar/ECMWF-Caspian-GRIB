@@ -72,22 +72,35 @@ def wave_request(run, step):
     return f"{NOMADS}/filter_gfswave.pl", params
 
 
-def fetch_grib(session, url, params, tries=3):
+def fetch_grib(session, url, params, tries=6):
     last = None
     for attempt in range(1, tries + 1):
         try:
-            r = session.get(url, params=params, timeout=120)
+            r = session.get(
+                url,
+                params=params,
+                timeout=120,
+                allow_redirects=True,
+            )
             if r.status_code != 200:
-                raise RuntimeError(f"HTTP {r.status_code}: {r.url}")
+                location = r.headers.get("Location", "")
+                detail = f"HTTP {r.status_code}: {r.url}"
+                if location:
+                    detail += f" -> {location}"
+                raise RuntimeError(detail)
+
             data = r.content
             if not data.startswith(b"GRIB"):
                 preview = data[:160].decode("utf-8", errors="replace").replace("\n", " ")
                 raise RuntimeError(f"Response is not GRIB: {preview}")
             return data
+
         except Exception as exc:
             last = exc
             if attempt < tries:
-                time.sleep(2 * attempt)
+                wait = min(30, 5 * attempt)
+                print(f"  NOMADS retry {attempt}/{tries - 1} after {wait}s: {exc}")
+                time.sleep(wait)
     raise last
 
 
@@ -100,7 +113,7 @@ def find_latest_complete(session, mode, last_step):
                 url, params = weather_request(run, last_step, WEATHER_GROUPS[0][1])
             else:
                 url, params = wave_request(run, last_step)
-            data = fetch_grib(session, url, params, tries=1)
+            data = fetch_grib(session, url, params, tries=2)
             if data.startswith(b"GRIB"):
                 print(f"Using {mode} run: {label}")
                 return run
@@ -148,11 +161,11 @@ def build_multi(session, run, mode, horizons, outdir):
                             print(f"  surface group at f000 skipped: {exc}")
                             continue
                         raise
-                    time.sleep(0.10)
+                    time.sleep(0.35)
             else:
                 url, params = wave_request(run, step)
                 requests_this_step = [fetch_grib(session, url, params)]
-                time.sleep(0.10)
+                time.sleep(0.35)
 
             for d in horizons:
                 if step <= d * 24:
