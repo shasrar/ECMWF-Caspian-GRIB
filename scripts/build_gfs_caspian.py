@@ -48,11 +48,16 @@ def weather_request(run, step, extra):
     }
     return f"{NOMADS}/filter_gfs_0p25.pl", params
 
-def fetch_grib(session, url, params, tries=3):
+def fetch_grib(session, url, params, tries=6):
     last = None
     for attempt in range(1, tries + 1):
         try:
-            r = session.get(url, params=params, timeout=120)
+            r = session.get(url, params=params, timeout=120, allow_redirects=True)
+            if r.status_code in (301, 302, 303, 307, 308):
+                location = r.headers.get("Location")
+                if location:
+                    follow = requests.compat.urljoin(r.url, location)
+                    r = session.get(follow, timeout=120, allow_redirects=True)
             if r.status_code != 200:
                 raise RuntimeError(f"HTTP {r.status_code}: {r.url}")
             data = r.content
@@ -63,7 +68,7 @@ def fetch_grib(session, url, params, tries=3):
         except Exception as exc:
             last = exc
             if attempt < tries:
-                time.sleep(2 * attempt)
+                time.sleep(4 * attempt)
     raise last
 
 def find_latest_complete(session, last_step):
@@ -114,7 +119,7 @@ def build_weather_multi(session, run, horizons, outdir):
                         print(f"  surface group at f000 skipped: {exc}")
                         continue
                     raise
-                time.sleep(0.10)
+                time.sleep(0.25)
             for d in horizons:
                 if step <= d * 24:
                     for data in messages:
