@@ -66,7 +66,15 @@ jobs:
         run: |
           set -euo pipefail
 
-          WAVE_SHORTNAMES='swh/mwd/mwp/shww/wvdir/mpww/PPWW/shts/swdir/mpts/PPTS'
+          # Match immutable GRIB2 identifiers, independent of ecCodes shortName.
+          # GRIB2 numbers 35/36 may display as PPWW/PPTS or pp1dw/pp1ds.
+          # discipline=10, category=0: 11 wave fields, no model wind.
+          WAVE_PARAMETER_NUMBERS='3/14/15/5/4/6/35/8/7/9/36'
+
+          EXPECTED_WAVE_IDENTITIES="$(printf '%s\n' \
+            '10 0 3' '10 0 14' '10 0 15' '10 0 5' '10 0 4' \
+            '10 0 6' '10 0 35' '10 0 8' '10 0 7' '10 0 9' \
+            '10 0 36' | sort -u)"
 
           for DAYS in 3 5 7; do
             WEATHER="input/GFS_CASPIAN_WEATHER_${DAYS}D.grib2"
@@ -80,11 +88,37 @@ jobs:
             test "$(head -c 4 "$WEATHER")" = "GRIB"
             test "$(head -c 4 "$GWAM")" = "GRIB"
 
-            grib_copy -w shortName="$WAVE_SHORTNAMES" "$GWAM" "$WAVE_ONLY"
+            # Explicit wave-only selection (GWAM wind has discipline=0).
+            grib_copy -w "discipline:i=10,parameterCategory:i=0,parameterNumber:i=$WAVE_PARAMETER_NUMBERS" \
+              "$GWAM" "$WAVE_ONLY"
 
             WAVE_COUNT="$(grib_count "$WAVE_ONLY")"
-            EXPECTED_WAVE=$(( (DAYS * 24 / 3 + 1) * 11 ))
-            test "$WAVE_COUNT" -eq "$EXPECTED_WAVE"
+            EXPECTED_TIMESTEPS=$(( DAYS * 24 / 3 + 1 ))
+            EXPECTED_WAVE=$(( EXPECTED_TIMESTEPS * 11 ))
+            if [ "$WAVE_COUNT" -ne "$EXPECTED_WAVE" ]; then
+              echo "GWAM ${DAYS}D wave count mismatch: actual=$WAVE_COUNT expected=$EXPECTED_WAVE" >&2
+              exit 1
+            fi
+
+            WAVE_IDENTITIES="$(grib_get -p discipline,parameterCategory,parameterNumber "$WAVE_ONLY" | sort -u)"
+            if [ "$WAVE_IDENTITIES" != "$EXPECTED_WAVE_IDENTITIES" ]; then
+              echo "GWAM ${DAYS}D wave GRIB2 identifier mismatch." >&2
+              echo "Expected:" >&2
+              printf '%s\n' "$EXPECTED_WAVE_IDENTITIES" >&2
+              echo "Actual:" >&2
+              printf '%s\n' "$WAVE_IDENTITIES" >&2
+              exit 1
+            fi
+
+            # Each of the 11 wave parameters must cover all forecast timesteps.
+            WAVE_ID_ROWS="$(grib_get -p discipline,parameterCategory,parameterNumber "$WAVE_ONLY")"
+            while IFS= read -r WAVE_ID; do
+              PER_PARAMETER_COUNT="$(printf '%s\n' "$WAVE_ID_ROWS" | grep -Fxc "$WAVE_ID")"
+              if [ "$PER_PARAMETER_COUNT" -ne "$EXPECTED_TIMESTEPS" ]; then
+                echo "GWAM ${DAYS}D timesteps incorrect for $WAVE_ID: actual=$PER_PARAMETER_COUNT expected=$EXPECTED_TIMESTEPS" >&2
+                exit 1
+              fi
+            done <<< "$EXPECTED_WAVE_IDENTITIES"
 
             cat "$WEATHER" "$WAVE_ONLY" > "$FINAL"
             test -s "$FINAL"
@@ -96,8 +130,12 @@ jobs:
             test "$FINAL_COUNT" -eq "$EXPECTED_FINAL"
 
             NAMES="$(grib_get -p shortName "$FINAL" | sort -u)"
-            for REQUIRED in 10u 10v 2t 2d prmsl gust vis tp swh mwd mwp shww wvdir mpww PPWW shts swdir mpts PPTS; do
-              echo "$NAMES" | grep -Fx "$REQUIRED" >/dev/null
+            # Weather names stay checked; waves are validated by stable GRIB2 IDs.
+            for REQUIRED in 10u 10v 2t 2d prmsl gust vis tp; do
+              if ! echo "$NAMES" | grep -Fx "$REQUIRED" >/dev/null; then
+                echo "Combined ${DAYS}D missing required weather field: $REQUIRED" >&2
+                exit 1
+              fi
             done
 
             if echo "$NAMES" | grep -Fx '10si' >/dev/null; then
@@ -134,7 +172,7 @@ jobs:
 
           Operational concept:
           Main file = GFS Weather + GWAM Wave
-          Cross-check separately with ECMWF Wave and GFS Wave.
+          Cross-check waves separately with ECMWF Wave.
 
           Planning/visualisation support only. Not a replacement for type-approved ECDIS, official ENC/MSI/warnings, SMS, or Master's navigational judgement.
           EOF
@@ -192,7 +230,7 @@ jobs:
           GFS source run: ${GFS_RUN}
           GWAM source run: ${GWAM_RUN}
 
-          ECMWF Wave and GFS Wave remain separate cross-check products.
+          ECMWF Wave is the alternative cross-check. GFS Wave is excluded for the Caspian.
           EOF
 
           if ! gh release view combined-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
