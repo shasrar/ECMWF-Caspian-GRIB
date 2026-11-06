@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 55
 
     steps:
@@ -35,7 +35,7 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y cdo libeccodes-tools
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cdo libeccodes-tools
           python -m pip install --upgrade pip
           python -m pip install requests
 
