@@ -42,19 +42,53 @@ jobs:
           set -euo pipefail
           mkdir -p input output
 
-          for DAYS in 3 5 7 10; do
-            gh release download gfs-latest \
-              --repo "$GITHUB_REPOSITORY" \
-              --dir input \
-              --pattern "GFS_CASPIAN_WEATHER_${DAYS}D.grib2" \
-              --pattern "GFS_CASPIAN_WEATHER_${DAYS}D_INFO.txt"
+          # Temporary GitHub API HTTP 5xx / transport errors must not leave
+          # partial GRIB files in input/. Download into a fresh staging
+          # directory and promote only when ALL requested assets exist.
+          download_release_with_retry() {
+            local tag="$1" prefix="$2"
+            local attempt stage DAYS missing
+            local -a patterns=()
 
-            gh release download latest \
-              --repo "$GITHUB_REPOSITORY" \
-              --dir input \
-              --pattern "ECMWF_CASPIAN_WAVE_${DAYS}D.grib2" \
-              --pattern "ECMWF_CASPIAN_WAVE_${DAYS}D_INFO.txt"
-          done
+            for DAYS in 3 5 7 10; do
+              patterns+=( --pattern "${prefix}_${DAYS}D.grib2" )
+              patterns+=( --pattern "${prefix}_${DAYS}D_INFO.txt" )
+            done
+
+            for attempt in 1 2 3; do
+              stage="$(mktemp -d input/download.XXXXXXXXXX)"
+              echo "Download $tag: attempt $attempt of 3"
+              if gh release download "$tag" \
+                  --repo "$GITHUB_REPOSITORY" \
+                  --dir "$stage" \
+                  "${patterns[@]}"; then
+                missing=0
+                for DAYS in 3 5 7 10; do
+                  test -s "$stage/${prefix}_${DAYS}D.grib2" || missing=1
+                  test -s "$stage/${prefix}_${DAYS}D_INFO.txt" || missing=1
+                done
+                if [ "$missing" -eq 0 ]; then
+                  mv "$stage"/* input/
+                  rmdir "$stage"
+                  echo "Download $tag: all 8 assets verified present."
+                  return 0
+                fi
+                echo "::warning::Download $tag incomplete; retrying full set."
+              else
+                echo "::warning::Download $tag failed on attempt $attempt."
+              fi
+
+              rm -rf "$stage"
+              if [ "$attempt" -lt 3 ]; then
+                sleep $(( attempt * 10 ))
+              fi
+            done
+            echo "::error::Download $tag failed after 3 attempts."
+            return 1
+          }
+
+          download_release_with_retry gfs-latest GFS_CASPIAN_WEATHER
+          download_release_with_retry latest ECMWF_CASPIAN_WAVE
 
       - name: Build Alternative Combined GRIB files
         shell: bash
