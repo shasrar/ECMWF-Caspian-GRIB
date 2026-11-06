@@ -25,14 +25,14 @@ concurrency:
 jobs:
   build:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.workflow_run.conclusion == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     steps:
       - name: Install ecCodes tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y libeccodes-tools
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libeccodes-tools
 
       - name: Download latest GFS Weather and ECMWF Wave assets
         env:
