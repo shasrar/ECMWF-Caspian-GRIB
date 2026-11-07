@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 55
 
     steps:
@@ -33,11 +33,34 @@ jobs:
           python-version: "3.12"
 
       - name: Install tools
+        timeout-minutes: 12
+        shell: bash
+        env:
+          PIP_DISABLE_PIP_VERSION_CHECK: "1"
         run: |
-          sudo apt-get update
-          sudo apt-get install -y cdo libeccodes-tools
-          python -m pip install --upgrade pip
-          python -m pip install requests
+          set -euo pipefail
+          # Pin the runner below and omit optional packages: the previous
+          # ubuntu-latest run spent its entire 55-minute job downloading them.
+          APT_OPTIONS=(
+            -o Acquire::Retries=2
+            -o Acquire::http::Timeout=30
+            -o Acquire::https::Timeout=30
+            -o DPkg::Lock::Timeout=60
+          )
+          sudo timeout --signal=TERM --kill-after=30s 180s \
+            apt-get "${APT_OPTIONS[@]}" update --error-on=any
+          sudo timeout --signal=TERM --kill-after=30s 420s \
+            env DEBIAN_FRONTEND=noninteractive \
+            apt-get "${APT_OPTIONS[@]}" install -y --no-install-recommends \
+              cdo libeccodes-tools
+          timeout --signal=TERM --kill-after=10s 120s \
+            python -m pip install --no-input --timeout 30 --retries 2 requests
+          # Fail before downloading or publishing if required tools are absent.
+          command -v cdo
+          command -v grib_count
+          command -v grib_ls
+          cdo --version
+          python -c "import requests"
 
       - name: Download ECMWF fields for all horizons
         id: fetch
