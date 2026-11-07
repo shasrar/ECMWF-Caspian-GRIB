@@ -1,0 +1,9 @@
+# ECMWF tool-installation recovery — 2026-11-07
+
+Failure evidence: run 42316541466 / job 128230415184 used ubuntu-latest resolving to Ubuntu26.04. Its Install tools step spent approximately55 minutes downloading a large default/recommended dependency tree via azure.archive.ubuntu.com before job cancellation. Logs show continuing slow downloads, not proof of a deadlock. No forecast download occurred.
+
+Fix commit: 8373dc124900bd963652c164b5330268e91f2de1. Pin ubuntu-24.04; use noninteractive apt --no-install-recommends for cdo/libeccodes-tools; configure two acquisition retries and30-second network timeouts; bound update/install/pip commands to180/420/120 seconds plus termination grace; cap install step at12 minutes; omit unnecessary pip self-upgrade; check required tools and requests import. Preserve schedule, fields, horizons, crop/validation, output names and publishing logic.
+
+Validation: local YAML parse and Bash syntax PASS. Exact GitHub readback matched intended workflow. Real push-triggered run42366702183 / job128386157563 completed SUCCESS,11:05:39–11:07:19 UTC (100 seconds). Install tools11:05:41–11:06:01 UTC (20 seconds). All download, crop/validation, inspection, artifact upload and latest-release publication steps PASS. Release API independently shows all3/5/7/10-day GRIB and INFO assets plus compatibility aliases updated11:07:14–11:07:16 UTC; title source run2026-11-07 00:00 UTC. This validates pipeline completion, not forecast accuracy or separate downstream combined products.
+
+No spending-budget change, retention change or schedule reduction. Installation may still fail promptly during an upstream outage; permanent elimination of network failures is not claimed. Rollback: restore .github/workflows/ecmwf-caspian.yml from parent of fix commit; do not roll back generated latest assets unnecessarily.
